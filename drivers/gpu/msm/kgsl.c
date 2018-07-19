@@ -118,8 +118,8 @@ static struct {
 
 static int kgsl_memfree_init(void)
 {
-	memfree.list = kzalloc(MEMFREE_ENTRIES * sizeof(struct memfree_entry),
-		GFP_KERNEL);
+	memfree.list = kcalloc(MEMFREE_ENTRIES, sizeof(struct memfree_entry),
+			       GFP_KERNEL);
 
 	return (memfree.list) ? 0 : -ENOMEM;
 }
@@ -2849,11 +2849,11 @@ long kgsl_ioctl_gpumem_sync_cache_bulk(struct kgsl_device_private *dev_priv,
 			|| param->count > (PAGE_SIZE / sizeof(unsigned int)))
 		return -EINVAL;
 
-	id_list = kzalloc(param->count * sizeof(unsigned int), GFP_KERNEL);
+	id_list = kcalloc(param->count, sizeof(unsigned int), GFP_KERNEL);
 	if (id_list == NULL)
 		return -ENOMEM;
 
-	entries = kzalloc(param->count * sizeof(*entries), GFP_KERNEL);
+	entries = kcalloc(param->count, sizeof(*entries), GFP_KERNEL);
 	if (entries == NULL) {
 		ret = -ENOMEM;
 		goto end;
@@ -2953,11 +2953,11 @@ long kgsl_ioctl_gpuobj_sync(struct kgsl_device_private *dev_priv,
 	if (param->count == 0 || param->count > 128)
 		return -EINVAL;
 
-	objs = kzalloc(param->count * sizeof(*objs), GFP_KERNEL);
+	objs = kcalloc(param->count, sizeof(*objs), GFP_KERNEL);
 	if (objs == NULL)
 		return -ENOMEM;
 
-	entries = kzalloc(param->count * sizeof(*entries), GFP_KERNEL);
+	entries = kcalloc(param->count, sizeof(*entries), GFP_KERNEL);
 	if (entries == NULL) {
 		kfree(objs);
 		return -ENOMEM;
@@ -4723,7 +4723,8 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	}
 
 	status = devm_request_irq(device->dev, device->pwrctrl.interrupt_num,
-				  kgsl_irq_handler, IRQF_TRIGGER_HIGH,
+				  kgsl_irq_handler,
+				  IRQF_TRIGGER_HIGH | IRQF_PERF_CRITICAL,
 				  device->name, device);
 	if (status) {
 		KGSL_DRV_ERR(device, "request_irq(%d) failed: %d\n",
@@ -4950,7 +4951,7 @@ static int __init kgsl_core_init(void)
 
 	init_kthread_worker(&kgsl_driver.worker);
 
-	kgsl_driver.worker_thread = kthread_run(kthread_worker_fn,
+	kgsl_driver.worker_thread = kthread_run_perf_critical(kthread_worker_fn,
 		&kgsl_driver.worker, "kgsl_worker_thread");
 
 	if (IS_ERR(kgsl_driver.worker_thread)) {

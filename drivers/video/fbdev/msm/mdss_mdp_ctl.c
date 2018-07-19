@@ -27,6 +27,7 @@
 #include "mdss_mdp.h"
 #include "mdss_mdp_trace.h"
 #include "mdss_debug.h"
+#include "mdss_dsi.h"
 
 #define MDSS_MDP_QSEED3_VER_DOWNSCALE_LIM 2
 #define NUM_MIXERCFG_REGS 3
@@ -4162,6 +4163,15 @@ int mdss_mdp_ctl_destroy(struct mdss_mdp_ctl *ctl)
 	return 0;
 }
 
+static void mdss_mdp_wait_for_panel_on(struct mdss_panel_data *pdata)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata =
+		container_of(pdata, typeof(*ctrl_pdata), panel_data);
+
+	if (atomic_read(&ctrl_pdata->needs_wake))
+		wait_for_completion(&ctrl_pdata->wake_comp);
+}
+
 int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
 	u32 flags)
 {
@@ -4185,8 +4195,11 @@ int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
 	pr_debug("sending ctl=%d event=%d flag=0x%x\n", ctl->num, event, flags);
 
 	do {
-		if (pdata->event_handler)
+		if (pdata->event_handler) {
 			rc = pdata->event_handler(pdata, event, arg);
+			if (event == MDSS_EVENT_LINK_READY)
+				mdss_mdp_wait_for_panel_on(pdata);
+		}
 		pdata = pdata->next;
 	} while (rc == 0 && pdata && pdata->active &&
 		!(flags & CTL_INTF_EVENT_FLAG_SKIP_BROADCAST));
@@ -5150,8 +5163,8 @@ int mdss_mdp_mixer_addr_setup(struct mdss_data_type *mdata,
 			(mdata->wfd_mode == MDSS_MDP_WFD_SHARED))
 		size++;
 
-	head = devm_kzalloc(&mdata->pdev->dev, sizeof(struct mdss_mdp_mixer) *
-			size, GFP_KERNEL);
+	head = devm_kcalloc(&mdata->pdev->dev,
+			    size, sizeof(struct mdss_mdp_mixer), GFP_KERNEL);
 
 	if (!head) {
 		pr_err("unable to setup mixer type=%d :kzalloc fail\n",
@@ -5221,8 +5234,8 @@ int mdss_mdp_ctl_addr_setup(struct mdss_data_type *mdata,
 		mutex_init(shared_lock);
 	}
 
-	head = devm_kzalloc(&mdata->pdev->dev, sizeof(struct mdss_mdp_ctl) *
-			size, GFP_KERNEL);
+	head = devm_kcalloc(&mdata->pdev->dev,
+			    size, sizeof(struct mdss_mdp_ctl), GFP_KERNEL);
 
 	if (!head) {
 		pr_err("unable to setup ctl and wb: kzalloc fail\n");
@@ -5257,8 +5270,9 @@ int mdss_mdp_wb_addr_setup(struct mdss_data_type *mdata,
 	u32 total, i;
 
 	total = num_block_wb + num_intf_wb;
-	wb = devm_kzalloc(&mdata->pdev->dev, sizeof(struct mdss_mdp_writeback) *
-			total, GFP_KERNEL);
+	wb = devm_kcalloc(&mdata->pdev->dev,
+			  total, sizeof(struct mdss_mdp_writeback),
+			  GFP_KERNEL);
 	if (!wb) {
 		pr_err("unable to setup wb: kzalloc fail\n");
 		return -ENOMEM;

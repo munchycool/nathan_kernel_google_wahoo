@@ -2451,6 +2451,9 @@ static void run_state_machine(struct tcpm_port *port)
 
 		tcpm_swap_complete(port, 0);
 		tcpm_typec_connect(port);
+		if (port->explicit_contract && tcpm_rp_cc(port)
+				== TYPEC_CC_RP_DEF)
+			tcpm_set_cc(port, TYPEC_CC_RP_1_5);
 		tcpm_check_send_discover(port);
 		/*
 		 * 6.3.5
@@ -3133,6 +3136,14 @@ static void _tcpm_cc_change(struct tcpm_port *port, enum typec_cc_status cc1,
 		 */
 		break;
 
+	case PORT_RESET:
+	case PORT_RESET_WAIT_OFF:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore CC changes here.
+		*/
+		break;
+
 	default:
 		if (tcpm_port_is_disconnected(port))
 			tcpm_set_state(port, unattached_state(port), 0);
@@ -3193,6 +3204,14 @@ static void _tcpm_pd_vbus_on(struct tcpm_port *port)
 		break;
 	case SNK_TRYWAIT:
 		tcpm_set_state(port, SNK_TRYWAIT_VBUS, 0);
+		break;
+
+	case PORT_RESET:
+	case PORT_RESET_WAIT_OFF:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore vbus changes here.
+		 */
 		break;
 
 	default:
@@ -3259,6 +3278,13 @@ static void _tcpm_pd_vbus_off(struct tcpm_port *port)
 
 	case PORT_RESET_WAIT_OFF:
 		tcpm_set_state(port, tcpm_default_state(port), 0);
+		break;
+
+	case PORT_RESET:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore vbus changes here.
+		 */
 		break;
 
 	default:

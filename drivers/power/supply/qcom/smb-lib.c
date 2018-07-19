@@ -2456,7 +2456,7 @@ int smblib_get_prop_typec_power_role(struct smb_charger *chg,
 				     union power_supply_propval *val)
 {
 	int rc = 0;
-	u8 ctrl;
+	u8 ctrl, isrc;
 
 	rc = smblib_read(chg, TYPE_C_INTRPT_ENB_SOFTWARE_CTRL_REG, &ctrl);
 	if (rc < 0) {
@@ -2466,6 +2466,12 @@ int smblib_get_prop_typec_power_role(struct smb_charger *chg,
 	}
 	smblib_dbg(chg, PR_REGISTER, "TYPE_C_INTRPT_ENB_SOFTWARE_CTRL = 0x%02x\n",
 		   ctrl);
+
+	rc = smblib_read(chg, TYPE_C_CFG_2_REG, &isrc);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't read TYPE_C_CFG_2_REG rc=%d\n", rc);
+		return rc;
+	}
 
 	if (ctrl & TYPEC_DISABLE_CMD_BIT) {
 		val->intval = POWER_SUPPLY_TYPEC_PR_NONE;
@@ -2477,7 +2483,9 @@ int smblib_get_prop_typec_power_role(struct smb_charger *chg,
 		val->intval = POWER_SUPPLY_TYPEC_PR_DUAL;
 		break;
 	case DFP_EN_CMD_BIT:
-		val->intval = POWER_SUPPLY_TYPEC_PR_SOURCE;
+		val->intval = isrc & EN_80UA_180UA_CUR_SOURCE_BIT ?
+			POWER_SUPPLY_TYPEC_PR_SOURCE_1_5 :
+			POWER_SUPPLY_TYPEC_PR_SOURCE;
 		break;
 	case UFP_EN_CMD_BIT:
 		val->intval = POWER_SUPPLY_TYPEC_PR_SINK;
@@ -2578,6 +2586,42 @@ int smblib_get_prop_use_external_vbus_output(struct smb_charger *chg,
 {
 	mutex_lock(&chg->vbus_output_lock);
 	val->intval = chg->use_external_vbus_reg ? 1 : 0;
+	mutex_unlock(&chg->vbus_output_lock);
+	return 0;
+}
+
+int smblib_get_prop_vbus_output_status(struct smb_charger *chg,
+				       union power_supply_propval *val)
+{
+	int internal_rc = 0;
+	int external_rc = 0;
+	u8 status = 0;
+
+	mutex_lock(&chg->vbus_output_lock);
+	mutex_lock(&chg->otg_oc_lock);
+
+	internal_rc = smblib_otg_is_enabled_locked(chg);
+	if (internal_rc < 0) {
+		val->intval = internal_rc;
+		goto unlock;
+	}
+	status |= (internal_rc == 1) ? INTERNAL_OTG_BIT : 0;
+
+	if (!chg->external_vbus_reg) {
+		val->intval = status;
+		goto unlock;
+	}
+
+	external_rc = regulator_is_enabled(chg->external_vbus_reg);
+	if (external_rc < 0) {
+		val->intval = external_rc;
+		goto unlock;
+	}
+	status |= (external_rc == 1) ? EXTERNAL_OTG_BIT : 0;
+	val->intval = status;
+
+unlock:
+	mutex_unlock(&chg->otg_oc_lock);
 	mutex_unlock(&chg->vbus_output_lock);
 	return 0;
 }
@@ -2754,6 +2798,7 @@ static int smblib_set_prop_typec_power_role_locked(
 		reg = UFP_EN_CMD_BIT | EXIT_SNK_BASED_ON_CC_BIT;
 		break;
 	case POWER_SUPPLY_TYPEC_PR_SOURCE:
+	case POWER_SUPPLY_TYPEC_PR_SOURCE_1_5:
 		reg = DFP_EN_CMD_BIT;
 		break;
 	default:
@@ -2776,6 +2821,14 @@ static int smblib_set_prop_typec_power_role_locked(
 				rc);
 		}
 	}
+
+	rc = smblib_masked_write(chg, TYPE_C_CFG_2_REG,
+				 EN_80UA_180UA_CUR_SOURCE_BIT,
+				 pr_role == POWER_SUPPLY_TYPEC_PR_SOURCE_1_5
+				 ? EN_80UA_180UA_CUR_SOURCE_BIT : 0);
+
+	if (rc < 0)
+		smblib_err(chg, "Couldnt update EN_ISRC_180UA_BIT rc=%d\n", rc);
 
 	rc = smblib_masked_write(chg, TYPE_C_INTRPT_ENB_SOFTWARE_CTRL_REG,
 				 TYPEC_POWER_ROLE_CMD_MASK |
@@ -5354,6 +5407,24 @@ static void smblib_iio_deinit(struct smb_charger *chg)
 		iio_channel_release(chg->iio.batt_i_chan);
 }
 
+static void smblib_set_low_batt_threshold(struct smb_charger *chg)
+{
+	u32 val;
+	int rc;
+
+	if (!of_property_read_u32(chg->dev->of_node,
+				  "qcom,low-batt-threshold", &val)) {
+		if (val > 0xf)
+			smblib_err(chg, "invalid qcom,low-batt-threshold value\n");
+		else {
+			rc = smblib_write(chg, LOW_BATT_THRESHOLD_CFG_REG, val);
+			if (rc < 0)
+				smblib_err(chg, "Couldn't write 0x%02x to LOW_BATT_THRESHOLD_CFG_REG rc=%d\n",
+					   val, rc);
+		}
+	}
+}
+
 int smblib_init(struct smb_charger *chg)
 {
 	int rc = 0;
@@ -5426,6 +5497,8 @@ int smblib_init(struct smb_charger *chg)
 			return rc;
 
 		smblib_init_port_overheat_mitigation(chg);
+
+		smblib_set_low_batt_threshold(chg);
 
 		chg->bms_psy = power_supply_get_by_name("bms");
 		chg->pl.psy = power_supply_get_by_name("parallel");
